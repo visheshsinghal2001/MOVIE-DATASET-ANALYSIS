@@ -1,0 +1,394 @@
+---
+title: "Untitled"
+author: "Yash Deole 20BCE1300"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(DT)
+library(tidyverse)
+library(wordcloud)
+library(tm)
+library(reshape2)
+```
+
+
+```{r}
+data=read.csv("movie_metadata.csv",header=T)
+```
+
+
+```{r}
+#exploring our data
+summary(data)
+```
+
+
+```{r}
+#removing columes not useful to us
+data2=data[,c(2:13,15,20:26)]
+```
+
+removing duplicate rows
+```{r}
+#removing 
+data2$movie_title <- (sapply(data2$movie_title,gsub,pattern="\\Â",replacement=""))
+data2$genres_2 <- (sapply(data2$genres,gsub,pattern="\\|",replacement=" "))
+data2 = data2[!duplicated(data2$movie_title),]
+
+```
+
+removing data with no revenue column as we need to predict revenue.
+imputing revenue can lead to wrong assumptions and predictions
+hence to remove bias we have removed all data without gross column
+```{r}
+data2=data2[complete.cases(data2['gross']),]
+```
+we must ensure same currancy value for all countries
+```{r}
+data2 <- transform(data2, budget = ifelse(country == "South Korea", budget/1186.31, budget))
+data2 <- transform(data2, budget = ifelse(country == "Japan", budget/111.91, budget))
+data2 <- transform(data2, budget = ifelse(country == "Turkey", budget/8.86, budget))
+data2 <- transform(data2, budget = ifelse(country == "Hungary", budget/309.93, budget))
+data2 <- transform(data2, budget = ifelse(country == "Thailand", budget/33.93, budget))
+
+data2 <- transform(data2, gross = ifelse(country == "South Korea", gross/1186.31, gross))
+data2 <- transform(data2, gross = ifelse(country == "Japan", gross/111.91, gross))
+data2 <- transform(data2, gross = ifelse(country == "Turkey", gross/8.86, gross))
+data2 <- transform(data2, gross = ifelse(country == "Hungary", gross/309.93, gross))
+data2 <- transform(data2, gross = ifelse(country == "Thailand", gross/33.93, gross))
+```
+
+```{r}
+print(paste(sum(complete.cases(data2)),"Complete cases!"))
+```
+
+```{r}
+summary(data2)
+```
+
+```{r}
+#remaining na values are not removed as we want to use as much data as we can.Imputing data as director name doesn't make sense.Hence from here on forth we will remove data as or when required
+```
+
+```{r}
+#decreasing the scale of budget and gross
+mil=1000000
+data2['budget']=data2['budget']/mil
+data2['gross']=data2['gross']/mil
+
+summary(data2['gross'])
+```
+
+
+```{r}
+df=data2[!is.na(data['budget']),]
+df["profit"]=df["gross"]-df["budget"]
+df <- transform(df, profit = ifelse(profit>0, 1, 0))
+
+df%>%
+  na.omit()%>%
+  ggplot(aes(imdb_score,budget,color=profit))+geom_point()+geom_jitter()
+
+#seeing year wise imdb vs 
+df%>%
+  na.omit()%>%
+  ggplot(aes(imdb_score,gross,color=budget))+geom_point()+facet_wrap(~profit)
+#most movies with high imdb rating our profitable
+
+#budget vs profit
+df["profit"]=df["gross"]-df["budget"]
+
+df%>%
+  na.omit()%>%
+  ggplot(aes(budget,profit))+geom_point()+
+  geom_hline(yintercept =0,colour="steel blue")
+#significant amount of movies actually arent profitable
+```
+Analysing negative profit movies
+```{r}
+neg=df[df['profit']<0,]
+dim(neg)
+# top movies with negative profit
+
+neg%>%
+  arrange(profit)%>%
+  head(10)
+```
+Splitting genre from tables
+```{r}
+
+genre=c()
+for(i in data2['genres_2']){
+  # print(i)
+  genre=c(genre,unlist(strsplit(i," ")));
+}
+```
+
+
+```{r}
+class(strsplit(data2[0,"genres_2"]," "))
+```
+
+```{r}
+gen=as.data.frame(table(genre))
+ggplot(gen, aes(genre, weight = Freq))+theme(axis.text.x=element_text(angle=45, hjust=1))+
+         geom_bar(fill="steel blue")+
+         scale_x_discrete(limits = gen$genre[order(gen$Freq,decreasing=T)])
+```
+
+```{r}
+originC=as.data.frame(table(data2['country']))
+ggplot(originC, aes(country, weight = Freq))+theme(axis.text.x=element_text(angle=45, hjust=1))+
+         geom_bar(fill="steel blue")+
+         scale_x_discrete(limits = originC$country[order(originC$Freq,decreasing=T)])
+
+```
+```{r}
+#to know which if country playes any role we must calculate value acc to average revenue
+
+originC=data2%>%group_by(country)%>%summarise(revenue=mean(gross))
+ggplot(originC, aes(country, weight = revenue))+
+theme(axis.text.x=element_text(angle=45, hjust=1))+
+         geom_bar(fill="steel blue")+
+         scale_x_discrete(limits = originC$country[order(originC$revenue,decreasing=T)])
+
+```
+
+
+```{r}
+originC=data2%>%
+  filter(!is.na(budget))%>%
+  group_by(country)%>%summarise(avg_budget=mean(budget, na.rm=T))
+ggplot(originC, aes(country, weight = avg_budget))+
+theme(axis.text.x=element_text(angle=45,hjust=1))+
+         geom_bar(fill="steel blue")+
+         scale_x_discrete(limits = originC$country[order(originC$avg_budget,decreasing=T)])
+```
+
+
+```{r}
+quantile(data2[!is.na(data2['imdb_score']),"imdb_score"],c(0.05,0.5,0.8,0.95))
+ggplot(data2,aes(imdb_score))+
+  geom_histogram(bins=80)+
+  geom_vline(xintercept = mean(data2$imdb_score,na.rm = TRUE),colour="steel blue")+
+  geom_vline(xintercept = quantile(data2$imdb_score, prob = c(0.05)),colour="red",linetype = "longdash")+
+  geom_vline(xintercept = quantile(data2$imdb_score, prob = c(0.95)),colour="red",linetype = "longdash")+
+  ylab("Count of Movies")+
+  xlab("IMDB Score")+
+  ggtitle("Histogram: IMDB Score")
+```
+Hence 95% percent of movies have imdb rating less than 8.We can classify our A listers as actors and directors who gave an average rating of 7.3 or higher
+```{r}
+#finding best directors and actors
+df=data2[!is.na(data2['director_name']),]
+df2=df%>%
+  group_by(director_name)%>%
+  summarise(counts=n(),avg_rate=mean(imdb_score,na.rm=T) )%>%
+  arrange(desc(avg_rate))%>%
+  filter(counts>4)
+#we dont need directors with 1-4 movies as not enough movies produced
+
+#top ten directors
+
+df2[1:10,]%>%
+  ggplot(aes(director_name,avg_rate))+theme(axis.text.x=element_text(angle=45, hjust=1))+geom_col(fill="springgreen")
+
+```
+
+```{r}
+#finding demographic with most revenue as we aim to 
+str(data2)
+data2%>%
+  group_by(content_rating)%>%
+  summarise(avg_revenue=mean(gross),avg_imdb=mean(imdb_score,na.rm=T))%>%
+  ggplot(aes(content_rating,avg_revenue,fill=avg_imdb))+theme(axis.text.x=element_text(angle=45, hjust=1))+geom_col()
+#G PG and PG-13 are most popular hence it may and will help to boost revenue though it has lower imdb ratings
+
+```
+
+```{r}
+data2=data2[complete.cases(data2$budget),]
+```
+
+```{r}
+list=c()
+for(i in 1:nrow(data2)) {
+  hit_status_criteria=data2[i,17]*1.5
+  if(data2[i,8]>=hit_status_criteria)
+  {
+    list=c(list,1)
+  }
+  else{
+    list=c(list,0)
+  }
+}
+data2$hit <- list
+head(data2)
+```
+
+```{r}
+
+data2%>%
+  group_by(director_name)%>%
+  filter(n()>5)%>%
+  summarise(hit_ratio=sum(hit)/n(),likes=mean(director_facebook_likes))%>%
+  ggplot(aes(director_name,hit_ratio,fill=likes))+ geom_col(stat='identity')+theme(axis.text.x=element_text(angle=45, hjust=1))
+
+#directors with more popularity doesnt translate into better hits
+
+```
+
+```{r}
+dataz=na.omit(data2)
+dataz=dataz[,c(2,3,4,5,7,8,12,17,18,19,20,22)]
+# colnames(data2)
+#no null value found
+#Finding correlation using heatmap
+corr_mat <- round(cor(dataz),2)
+
+# reorder corr matrix
+# using corr coefficient as distance metric
+dist <- as.dist((1-corr_mat)/2)
+
+# hierarchical clustering the dist matrix
+hc <- hclust(dist)
+corr_mat <-corr_mat[hc$order, hc$order]
+melted_corr_mat <- melt(corr_mat)
+
+ggplot(data = melted_corr_mat, aes(x=Var1, y=Var2,fill=value)) +  geom_tile()+
+  geom_text(aes(Var2, Var1, label = value),
+            color = "white", size = 4)+labs(title="Corelation Matrix of given Variables")+xlab("Variables")+ylab("Variables")
+```
+
+
+```{r}
+library(e1071)
+library(caTools)
+library(class)
+data10=data2[c(2:5,7,12,17,18,19,20,22)]
+data10=na.omit(data10)
+split <- sample.split(data10, SplitRatio = 0.7)
+train_cl <- subset(data10, split == "TRUE")
+test_cl <- subset(data10, split == "FALSE")
+  
+# Feature Scaling
+train_scale <- scale(train_cl[, 1:10])
+test_scale <- scale(test_cl[, 1:10])
+  
+# Fitting KNN Model 
+# to training dataset
+classifier_knn <- knn(train = train_scale,test = test_scale,cl = train_cl$hit,k = 1)
+  
+# Confusiin Matrix
+cm <- table(test_cl$hit, classifier_knn)
+cm
+  
+# Model Evaluation - Choosing K
+# Calculate out of Sample error
+misClassError <- mean(classifier_knn != test_cl$hit)
+print(paste('Accuracy =', 1-misClassError))
+  
+# K = 19
+classifier_knn <- knn(train = train_scale,
+                      test = test_scale,
+                      cl = train_cl$hit,
+                      k = 19)
+misClassError <- mean(classifier_knn != test_cl$hit)
+print(paste('Accuracy =', 1-misClassError))
+```
+
+
+```{r}
+data3<- data2[c('movie_title','budget','gross','imdb_score','actor_1_facebook_likes','actor_2_facebook_likes','actor_3_facebook_likes','hit')]
+data10=data2[c('budget','gross','hit')]
+str(data2)
+# Loading package
+library(caTools)
+library(randomForest)
+```
+
+
+```{r}
+r2 = function(ytest,y_pred){
+  ans = (1-sum((ytest-y_pred)^2)/sum((ytest-mean(ytest))^2))
+  paste("R2 Score:",round(ans*100,2),"%")
+}
+head(data)
+
+```
+
+
+```{r}
+data2 =na.omit(data2)
+```
+
+
+```{r}
+library(caTools)
+library(randomForest)
+datak = data2[,c(2:5,7,12,17,18,19,20)]
+datak$Gross = data2$gross
+
+X = datak[,-ncol(datak)]
+Y = datak[,ncol(datak)]
+# # iris = datasets::iris
+split <- sample.split(datak, SplitRatio = 0.7)
+# split
+
+train <- subset(datak, split == "TRUE")
+test <- subset(datak, split == "FALSE")
+
+# Fitting Random Forest to the train dataset
+set.seed(120)  # Setting seed
+
+classifier_RF = randomForest(x = X,y = Y,ntree = 500)
+xtrain = train[,-ncol(datak)]
+xtest = test[,-ncol(datak)]
+ytest = test[,ncol(datak)]
+ytrain = train[,ncol(datak)]
+classifier_RF
+
+# Predicting the Test set results
+y_pred = predict(classifier_RF, newdata = xtest)
+
+# Plotting model
+plot(classifier_RF)
+
+# Importance plot
+importance(classifier_RF)
+
+# Variable importance plot
+varImpPlot(classifier_RF)
+
+r2(ytest,y_pred)
+```
+
+```{r}
+dataz=na.omit(data2)
+dataz=dataz[,c(2,3,4,5,7,8,12,17,18,19,20,22)]
+#no null value found
+#Finding correlation using heatmap
+corr_mat <- round(cor(dataz),2)
+
+# reorder corr matrix
+# using corr coefficient as distance metric
+dist <- as.dist((1-corr_mat)/2)
+
+# hierarchical clustering the dist matrix
+hc <- hclust(dist)
+corr_mat <-corr_mat[hc$order, hc$order]
+melted_corr_mat <- melt(corr_mat)
+
+ggplot(data = melted_corr_mat, aes(x=Var1, y=Var2,fill=value)) +  geom_tile()+
+  geom_text(aes(Var2, Var1, label = value),
+            color = "white", size = 4)+labs(title="Corelation Matrix of given Variables")+
+  theme(axis.text.x=element_text(angle=45, hjust=1))+
+  xlab("Variables")+ylab("Variables")
+colnames(data)
+```
+
+
